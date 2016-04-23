@@ -28,6 +28,7 @@ public:
 	void initNormals(NormalTemplate t);
 	~WoodhamData();
 	CImg<float>* GenerateNormalMap();
+
 	void GenerateLightingDirection();
 };
 

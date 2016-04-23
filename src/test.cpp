@@ -58,6 +58,7 @@ int main(int narg, char* argv[]) {
 		}
 	}
 
+	std::cout<< "Estimate Error: "<< woodham.getError() << std::endl;
 	for (int i = 0; i < iterations; i++) {
 		woodham.GenerateLightingDirection();
 		woodham.GenerateNormalMap();
@@ -90,6 +91,7 @@ int main(int narg, char* argv[]) {
 			while (!main_disp.is_closed()) {
 			}
 		}
+		std::cout<< "Estimate Error: "<< woodham.getError() << std::endl;
 	}
 
 	Eigen::MatrixXd reduce(2, 3);

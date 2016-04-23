@@ -9,6 +9,7 @@
 #include "WoodhamData.h"
 #include <fstream>
 #include <vector>
+#include <omp.h>
 
 using Eigen::MatrixXd;
 using namespace cimg_library;
@@ -39,7 +40,7 @@ WoodhamData::WoodhamData(std::istream &inputStream) {
 }
 
 void WoodhamData::initNormals(NormalTemplate normaltemplate) {
-	int imageWidth =  normalMap->width();
+	int imageWidth = normalMap->width();
 	int imageHeight = normalMap->height();
 	switch (normaltemplate) {
 	case CHECKER:
@@ -62,12 +63,11 @@ void WoodhamData::initNormals(NormalTemplate normaltemplate) {
 			for (int y = 0; y < imageHeight; y++) {
 
 				//Eigen::Vector3f tmp = Eigen::Vector3f(x*4.0/(imageWidth+1)-2, y*4.0/(imageHeight+1)-2,1);
-				Eigen::Vector3f tmp = Eigen::Vector3f(
-						2.0*x/imageWidth-1,
-						-(2.0*y/imageHeight-1), 0.25f);
+				Eigen::Vector3f tmp = Eigen::Vector3f(2.0 * x / imageWidth - 1,
+						-(2.0 * y / imageHeight - 1), 0.25f);
 				tmp = tmp / tmp.norm();
-				(*this->normalMap)(x, y, 0, 0) = tmp.x() / 2 + 0.5;
-				(*this->normalMap)(x, y, 0, 1) = tmp.y() / 2 + 0.5;
+				(*this->normalMap)(x, y, 0, 0) = -tmp.x() / 2 + 0.5;
+				(*this->normalMap)(x, y, 0, 1) = -tmp.y() / 2 + 0.5;
 				(*this->normalMap)(x, y, 0, 2) = tmp.z() / 2 + 0.5;
 			}
 		}
@@ -95,6 +95,10 @@ CImg<float>* WoodhamData::GenerateNormalMap() {
 
 	int imageWidth = RadianceMaps[0]->image->width();
 	int imageHeight = RadianceMaps[0]->image->height();
+	
+#pragma omp parallel
+	{
+		#pragma omp for
 	for (int x = 0; x < imageWidth; x++) {
 		for (int y = 0; y < imageHeight; y++) {
 			MatrixXd I(rows, 1);
@@ -112,51 +116,83 @@ CImg<float>* WoodhamData::GenerateNormalMap() {
 			}
 		}
 	}
+	}
 	return this->normalMap;
 }
 
 void WoodhamData::GenerateLightingDirection() {
-	int imageWidth = (this->normalMap)->width();
-	int imageHeight = (this->normalMap)->height();
-	for (int r = 0; r < RadianceMaps.size(); r++) {
-		MatrixXd NTN(3, 3);
-		NTN << 0, 0, 0, 0, 0, 0, 0, 0, 0;
-		MatrixXd Rn(3, 1);
-		Rn << 0, 0, 0;
-		MatrixXd n(3, 1);
-		MatrixXd ntn(3, 3);
-		for (int x = 0; x < imageWidth; x++) {
-			for (int y = 0; y < imageHeight; y++) {
-				for (int i = 0; i < 3; i++) {
-					n(i, 0) = (*this->normalMap)(x, y, 0, i) * 2.0 - 1;
-				}
-				//ntn = n * n.transpose();
+	int iterations = RadianceMaps.size();
+#pragma omp parallel
+	{
+		#pragma omp for
+		for (int r = 0; r < iterations; r++) {
+			int imageWidth = (this->normalMap)->width();
+			int imageHeight = (this->normalMap)->height();
+			MatrixXd NTN(3, 3);
+			NTN << 0, 0, 0, 0, 0, 0, 0, 0, 0;
+			MatrixXd Rn(3, 1);
+			Rn << 0, 0, 0;
+			MatrixXd n(3, 1);
+			MatrixXd ntn(3, 3);
+			for (int x = 0; x < imageWidth; x++) {
+				for (int y = 0; y < imageHeight; y++) {
+					for (int i = 0; i < 3; i++) {
+						n(i, 0) = (*this->normalMap)(x, y, 0, i) * 2.0 - 1;
+					}
+					//ntn = n * n.transpose();
 
-				//faster version of n*n.transpose() (no allocation):
-				ntn(0,0)=n(0)*n(0);ntn(0,1)=n(1)*n(0);ntn(0,2)=n(2)*n(0);
-				ntn(1,0)=n(0)*n(1);ntn(1,1)=n(1)*n(1);ntn(1,2)=n(2)*n(1);
-				ntn(2,0)=n(0)*n(2);ntn(2,1)=n(1)*n(2);ntn(2,2)=n(2)*n(2);
-				NTN += ntn;
-				Rn += n * ((*RadianceMaps[r]->image)(x, y));
+					//faster version of n*n.transpose() (no allocation):
+					ntn(0, 0) = n(0) * n(0);
+					ntn(0, 1) = n(1) * n(0);
+					ntn(0, 2) = n(2) * n(0);
+					ntn(1, 0) = n(0) * n(1);
+					ntn(1, 1) = n(1) * n(1);
+					ntn(1, 2) = n(2) * n(1);
+					ntn(2, 0) = n(0) * n(2);
+					ntn(2, 1) = n(1) * n(2);
+					ntn(2, 2) = n(2) * n(2);
+					NTN += ntn;
+					Rn += n * ((*RadianceMaps[r]->image)(x, y));
+				}
+			}
+			Eigen::MatrixXd linalg(3, 4);
+			linalg << NTN, Rn;
+			rref(linalg);
+			//normalize column 3
+			linalg.col(3) = linalg.col(3) / linalg.col(3).norm();
+//		std::cout << "Direction Generation: %" << r * 100 / RadianceMaps.size()
+//				<< std::endl;
+			for (int i = 0; i < 3; i++) {
+				(*RadianceMaps[r]->lightingDirection)(i) = linalg(i, 3);
 			}
 		}
-		Eigen::MatrixXd linalg(3, 4);
-		linalg << NTN, Rn;
-		rref(linalg);
-		//normalize column 3
-		linalg.col(3) = linalg.col(3) / linalg.col(3).norm();
-		std::cout << "Direction Generation: %" << r * 100 / RadianceMaps.size()
-				<< std::endl;
-//		std::cout << "\tOldLighting: "
-//				<< (*RadianceMaps[r]->lightingDirection).transpose()
-//				<< std::endl;
-		for (int i = 0; i < 3; i++) {
-			(*RadianceMaps[r]->lightingDirection)(i) = linalg(i, 3);
-		}
-//		std::cout << "\tNewLighting: "
-//				<< (*RadianceMaps[r]->lightingDirection).transpose()
-//				<< std::endl;
 	}
+}
+
+float WoodhamData::getError() {
+	float error;
+	int iterations = RadianceMaps.size();
+	#pragma omp parallel reduction( + : error )
+	{
+		#pragma omp for
+		for (int r = 0; r < iterations; r++) {
+			int imageWidth = (this->normalMap)->width();
+			int imageHeight = (this->normalMap)->height();
+			Eigen::Vector3f n;
+			float localerr=0;
+			for (int x = 0; x < imageWidth; x++) {
+				for (int y = 0; y < imageHeight; y++) {
+					for (int i = 0; i < 3; i++) {
+						n(i) = (*this->normalMap)(x, y, 0, i) * 2.0 - 1;
+					}
+					float tmp = n.dot(*RadianceMaps[r]->lightingDirection)-(*RadianceMaps[r]->image)(x,y);
+					localerr += (tmp*tmp);
+				}
+			}
+			error += localerr;
+		}
+	}
+	return error;
 }
 
 WoodhamData::~WoodhamData() {
